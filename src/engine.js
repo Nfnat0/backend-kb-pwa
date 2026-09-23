@@ -1,0 +1,41 @@
+export const INTERVALS=[7,14,30,60];
+export function dayKey(date=new Date()){return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
+export function addDays(day,n){const [y,m,d]=day.split('-').map(Number);return dayKey(new Date(y,m-1,d+n,12));}
+export function schedule(previous,rating,today=dayKey()){
+ const interval=rating===0?1:rating===1?3:INTERVALS[Math.min(previous?.rating===2?Math.max(0,INTERVALS.indexOf(previous.interval))+1:0,3)];
+ return {rating,interval,due:addDays(today,interval)};
+}
+export function latest(events,{scheduled=false}={}){
+ const map=new Map();for(const e of events)if(!scheduled||!e.practice)map.set(e.question,e);return map;
+}
+export function isWeak(e){return Boolean(e&&(e.type==='choice'?!e.correct:e.rating<2));}
+export function selectQuestions(questions,state,{category='',topic='',practice=false,today=dayKey()}={}){
+ const past=latest(state.events,{scheduled:true});
+ const scoped=questions.filter(q=>(!category||q.category===category)&&(!topic||q.topic===topic));
+ const due=scoped.filter(q=>past.has(q.id)&&past.get(q.id).due<=today).sort((a,b)=>past.get(a.id).due.localeCompare(past.get(b.id).due));
+ const fresh=scoped.filter(q=>!past.has(q.id));
+ const result=practice?scoped:[...due,...fresh];
+ return result.slice(0,state.settings.size).map(q=>q.id);
+}
+export function makeSession(ids,{category='',topic='',practice=false}={}){
+ return {id:crypto.randomUUID(),pending:ids,completed:[],total:ids.length,category,topic,practice,phase:'question',selected:null,startedAt:new Date().toISOString()};
+}
+export function answer(state,q,rating,now=new Date()){
+ const s=state.session;if(!s||s.pending[0]!==q.id||s.phase!=='answer')throw Error('回答状態を確認してください。');
+ const previous=latest(state.events,{scheduled:true}).get(q.id);const day=dayKey(now);
+ const practice=s.practice||Boolean(previous&&previous.due>day);
+ const correct=q.type==='choice'?s.selected===q.correct:null;
+ const resultRating=q.type==='choice'?(correct?2:0):rating;
+ if(![0,1,2].includes(resultRating))throw Error('評価を選んでください。');
+ const next=practice?(previous?{due:previous.due,interval:previous.interval}: {due:day,interval:0}):schedule(previous,resultRating,day);
+ const event={id:crypto.randomUUID(),question:q.id,type:q.type,topic:q.topic,rating:resultRating,correct,choice:q.type==='choice'?s.selected:null,at:now.toISOString(),day,practice,...next};
+ state.events.push(event);s.completed.push(event.id);s.phase='feedback';s.lastEvent=event.id;return event;
+}
+export function nextQuestion(state){const s=state.session;s.pending.shift();s.phase=s.pending.length?'question':'done';s.selected=null;delete s.lastEvent;}
+export function stats(state,questions,today=dayKey()){
+ const ids=new Set(questions.map(q=>q.id));const events=state.events.filter(e=>ids.has(e.question));const evaluated=latest(events);const scheduled=latest(events,{scheduled:true});
+ const choice=state.events.filter(e=>e.type==='choice');const explain=[...evaluated.values()].filter(e=>e.type==='explain');
+ const days=new Set(state.events.map(e=>e.day));let cursor=days.has(today)?today:addDays(today,-1),streak=0;
+ while(days.has(cursor)){streak++;cursor=addDays(cursor,-1);}
+ return {answers:state.events.length,learned:evaluated.size,today:state.events.filter(e=>e.day===today).length,days:days.size,streak,due:[...scheduled.values()].filter(e=>e.due<=today).length,choiceTotal:choice.length,accuracy:choice.length?Math.round(choice.filter(e=>e.correct).length/choice.length*100):null,ratings:[0,1,2].map(r=>explain.filter(e=>e.rating===r).length)};
+}
