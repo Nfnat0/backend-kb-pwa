@@ -1,27 +1,49 @@
 import './style.css';
 import content from './data/content.json';
-import {loadState,saveState,emptyState,STORAGE_KEY,exportBackup,readBackup} from './store.js';
-import {makeSession,selectQuestions,answer,nextQuestion,dayKey} from './engine.js';
+import foundation from './data/foundation.json';
+import {loadState,saveState,emptyState,STORAGE_KEY,loadFoundationState,saveFoundationState,emptyFoundationState,FOUNDATION_STORAGE_KEY,loadMode,saveMode,MODE_STORAGE_KEY,exportBackup,readBackup} from './store.js';
+import {makeSession,selectQuestions,answer,nextQuestion,dayKey,makeFoundationSession,answerFoundation} from './engine.js';
 import {icon,navItems,esc,button,download} from './ui.js';
 import {home,categories,category,review,statistics,settings} from './views/dashboard.js';
 import {study,topic} from './views/learning.js';
+import {foundationHome,foundationCategories,foundationCategory,foundationStudy,foundationReview,foundationStatistics,foundationGlossary} from './views/foundation.js';
 import {renderDiagrams} from './markdown.js';
 const app=document.querySelector('#app');
-let state,storageError='',offlineLabel='オフライン用の教材を準備中',modal=null,restoreDraft=null,toastTimer;
+let state,foundationState,selectedMode=loadMode(),storageError='',offlineLabel='オフライン用の教材を準備中',modal=null,restoreDraft=null,toastTimer;
 try{state=loadState();}catch{state=emptyState();storageError='保存済みの記録を読み込めません。元のデータは上書きしていません。まず復旧用データを書き出し、バックアップから復元してください。';}
+try{foundationState=loadFoundationState();}catch{foundationState=emptyFoundationState();storageError='保存済みの基礎編記録を読み込めません。元のデータは上書きしていません。まず復旧用データを書き出し、バックアップから復元してください。';}
 const validIds=new Set(content.questions.map(q=>q.id));
+const validLessonIds=new Set(foundation.lessons.map(l=>l.id));
 if(state.session&&state.session.pending.some(id=>!validIds.has(id))){state.session=null;try{saveState(state);}catch(e){storageError=e.message;}}
-const ctx=()=>({...content,state,offlineLabel});
+if(foundationState.session&&!validLessonIds.has(foundationState.session.lessonId)){foundationState.session=null;try{saveFoundationState(foundationState);}catch(e){storageError=e.message;}}
+const ctx=()=>({...content,foundation,state,foundationState,selectedMode,offlineLabel});
 function notify(message){const n=document.querySelector('#notifications');n.textContent=message;clearTimeout(toastTimer);toastTimer=setTimeout(()=>n.textContent='',5000);}
 function mutate(fn){if(storageError)throw Error('保存データの復旧が必要です。設定からバックアップを復元してください。');const copy=structuredClone(state);fn(copy);saveState(copy);state=copy;}
+function mutateFoundation(fn){if(storageError)throw Error('保存データの復旧が必要です。設定からバックアップを復元してください。');const copy=structuredClone(foundationState);fn(copy);saveFoundationState(copy);foundationState=copy;}
+function setMode(mode){selectedMode=mode==='foundations'?'foundations':'practice';saveMode(selectedMode);}
 function navigate(route){if(location.hash===route)render();else location.hash=route;}
 function route(){const [path,query]=location.hash.replace(/^#\/?/,'').split('?');const [page='home',id]=path.split('/');return {page:page||'home',id,query:new URLSearchParams(query)};}
 function render({keepScroll=false}={}){
- const y=scrollY;const {page,id,query}=route();const c=ctx();let html;
- switch(page){case 'home':html=home(c);break;case 'categories':html=categories(c);break;case 'category':html=category(c,id);break;case 'topic':html=topic(c,id);break;case 'study':html=study(c);break;case 'review':html=review(c,id);break;case 'stats':html=statistics(c);break;case 'settings':html=settings(c);break;default:html=home(c);}
- const selected=['category','topic'].includes(page)?'categories':page;
+ const y=scrollY;const {page,id,query}=route();const c=ctx();const isFoundation=selectedMode==='foundations';let html;
+ switch(page){
+  case 'home':html=isFoundation?foundationHome(c):home(c);break;
+  case 'categories':html=isFoundation?foundationCategories(c):categories(c);break;
+  case 'category':html=isFoundation?foundationCategory(c,id):category(c,id);break;
+  case 'topic':html=topic(c,id);break;
+  case 'study':html=study(c);break;
+  case 'foundation-study':html=foundationStudy(c);break;
+  case 'glossary':html=foundationGlossary(c);break;
+  case 'review':html=isFoundation?foundationReview(c,id):review(c,id);break;
+  case 'stats':html=isFoundation?foundationStatistics(c):statistics(c);break;
+  case 'settings':html=settings(c);break;
+  default:html=isFoundation?foundationHome(c):home(c);
+ }
+ const selected=['category','topic','glossary'].includes(page)?'categories':page;
+ const isStudy=['study','foundation-study'].includes(page);
  const brand=`<a class="brand" href="#/home"><img src="./icon.svg" alt=""><div>Backend<span>Knowledge Base</span></div></a>`;
- app.innerHTML=`<div class="app-shell"><aside class="sidebar">${brand}<nav aria-label="メインナビゲーション">${navItems.map(([id,i,label])=>`<a class="nav-item ${selected===id?'active':''}" href="#/${id}" ${selected===id?'aria-current="page"':''}>${icon(i)}${label}</a>`).join('')}</nav><div class="sidebar-foot"><p>${icon('BookOpen')}24トピック・120問</p><span>理解を、説明できる力に。</span></div></aside><div class="mobile-header">${brand}<a class="icon-button" href="#/review/bookmarks" aria-label="ブックマークを開く">${icon('Bookmark')}</a></div><main class="main ${page==='study'?'study-mode':''}" id="main-content"><div class="main-inner">${storageError?`<div class="storage-error" role="alert">${esc(storageError)}<br><button data-action="raw-export">復旧用データを書き出す</button> · <a href="#/settings">設定を開く</a></div>`:''}${html}</div></main><nav class="bottom-nav" aria-label="下部ナビゲーション">${navItems.map(([id,i,label])=>`<a class="${selected===id?'active':''}" href="#/${id}" ${selected===id?'aria-current="page"':''}>${icon(i)}<span>${label}</span></a>`).join('')}</nav></div>`;
+ const footText=isFoundation?`基礎編 · ${foundation.lessons.length}レッスン`:`実践編 · 24トピック・120問`;
+ const footSub=isFoundation?'基本概念から少しずつ学ぶ。':'理解を、説明できる力に。';
+ app.innerHTML=`<div class="app-shell"><aside class="sidebar">${brand}<nav aria-label="メインナビゲーション">${navItems.map(([id,i,label])=>`<a class="nav-item ${selected===id?'active':''}" href="#/${id}" ${selected===id?'aria-current="page"':''}>${icon(i)}${label}</a>`).join('')}</nav><div class="sidebar-foot"><p>${icon('BookOpen')}${footText}</p><span>${footSub}</span></div></aside><div class="mobile-header">${brand}<a class="icon-button" href="#/review/bookmarks" aria-label="ブックマークを開く">${icon('Bookmark')}</a></div><main class="main ${isStudy?'study-mode':''}" id="main-content"><div class="main-inner">${storageError?`<div class="storage-error" role="alert">${esc(storageError)}<br><button data-action="raw-export">復旧用データを書き出す</button> · <a href="#/settings">設定を開く</a></div>`:''}${html}</div></main><nav class="bottom-nav" aria-label="下部ナビゲーション">${navItems.map(([id,i,label])=>`<a class="${selected===id?'active':''}" href="#/${id}" ${selected===id?'aria-current="page"':''}>${icon(i)}<span>${label}</span></a>`).join('')}</nav></div>`;
  if(modal)drawModal();
  if(keepScroll)window.scrollTo(0,y);else window.scrollTo(0,0);
  if(page==='topic'&&query.has('chapter'))requestAnimationFrame(()=>document.getElementById('chapter-'+query.get('chapter'))?.scrollIntoView());
@@ -55,6 +77,7 @@ async function checkOffline(){
 app.addEventListener('toggle',event=>{if(event.target.tagName==='DETAILS'&&event.target.open)renderDiagrams(event.target).catch(()=>notify('図を表示できませんでした。図式コードをご確認ください。'));},true);
 app.addEventListener('input',event=>{
  if(event.target.id==='category-search'){const term=event.target.value.trim().toLocaleLowerCase();let n=0;app.querySelectorAll('.category-group').forEach(g=>{g.hidden=!g.dataset.search.toLocaleLowerCase().includes(term);if(!g.hidden)n++;});document.querySelector('#search-empty').hidden=n>0;}
+ if(event.target.id==='glossary-search'){const term=event.target.value.trim().toLocaleLowerCase();let n=0;app.querySelectorAll('.glossary-item').forEach(g=>{g.hidden=!g.dataset.search.includes(term);if(!g.hidden)n++;});document.querySelector('#glossary-empty').hidden=n>0;}
 });
 app.addEventListener('change',async event=>{
  try{
@@ -64,8 +87,10 @@ app.addEventListener('change',async event=>{
   const file=event.target.files[0];if(file.size>15_000_000)throw Error('バックアップは15MB以下のファイルを選択してください。');
   restoreDraft=readBackup(await file.text());
   if(restoreDraft.state.session?.pending.some(id=>!validIds.has(id)))restoreDraft.state.session=null;
+  if(restoreDraft.foundations.session&&!validLessonIds.has(restoreDraft.foundations.session.lessonId))restoreDraft.foundations.session=null;
   const unknown=restoreDraft.state.events.filter(e=>!validIds.has(e.question)).length;
-  showModal({title:'バックアップを復元しますか？',body:`書き出し日時：${esc(new Date(restoreDraft.exportedAt).toLocaleString('ja-JP'))}<br>回答 ${restoreDraft.state.events.length}回 · ブックマーク ${restoreDraft.state.bookmarks.length}件<br><br>現在の記録を置き換えます。${unknown?`旧教材の履歴${unknown}件も保持します。`:''}`,buttons:button('現在の記録を書き出す','export','secondary')+button('このバックアップで置き換える','confirm-import','danger')+button('キャンセル','close-modal','secondary')});
+  const fCompleted=Object.keys(restoreDraft.foundations.completedAt).length;
+  showModal({title:'バックアップを復元しますか？',body:`書き出し日時：${esc(new Date(restoreDraft.exportedAt).toLocaleString('ja-JP'))}<br>実践編：回答 ${restoreDraft.state.events.length}回 · ブックマーク ${restoreDraft.state.bookmarks.length}件<br>基礎編：完了 ${fCompleted}レッスン · 学習 ${restoreDraft.foundations.events.length}回 · 保存 ${restoreDraft.foundations.bookmarks.length}件<br><br>現在の記録を置き換えます。${unknown?`旧教材の履歴${unknown}件も保持します。`:''}`,buttons:button('現在の記録を書き出す','export','secondary')+button('このバックアップで置き換える','confirm-import','danger')+button('キャンセル','close-modal','secondary')});
   event.target.value='';
  }
  }catch(e){notify(e.message||'処理できませんでした。');}
@@ -75,9 +100,50 @@ document.addEventListener('click',async event=>{
  const action=el.dataset.action;
  try{
  switch(action){
- case 'start':startWithCheck({category:el.dataset.category||'',topic:el.dataset.topic||''});break;
- case 'practice':startWithCheck({category:el.dataset.category||'',topic:el.dataset.topic||'',practice:true});break;
- case 'single':startWithCheck({question:el.dataset.question});break;
+ case 'switch-mode':{
+  setMode(el.dataset.mode);
+  const {page}=route();
+  if(['study','foundation-study','glossary'].includes(page))navigate('#/home');
+  else render();
+  break;
+ }
+ case 'start-foundation':{
+  const lessonId=el.dataset.lesson;
+  if(!validLessonIds.has(lessonId))break;
+  mutateFoundation(f=>{f.session=makeFoundationSession(lessonId,{review:Boolean(el.dataset.review),practice:Boolean(el.dataset.practice)});});
+  navigate('#/foundation-study');
+  break;
+ }
+ case 'resume-foundation':navigate('#/foundation-study');break;
+ case 'foundation-step':mutateFoundation(f=>{if(f.session)f.session.step=el.dataset.step;});render();break;
+ case 'foundation-choice':mutateFoundation(f=>{if(f.session&&f.session.step==='check'&&!f.session.selectedChoice)f.session.selectedChoice=el.dataset.choice;});render({keepScroll:true});break;
+ case 'foundation-reveal':mutateFoundation(f=>{if(f.session)f.session.keyPointsRevealed=true;});render({keepScroll:true});break;
+ case 'foundation-rate':{
+  const lesson=foundation.lessons.find(l=>l.id===foundationState.session?.lessonId);
+  if(!lesson)break;
+  mutateFoundation(f=>answerFoundation(f,lesson,Number(el.dataset.rating)));
+  render();
+  break;
+ }
+ case 'foundation-bookmark':{
+  const id=el.dataset.lesson;
+  mutateFoundation(f=>{f.bookmarks=f.bookmarks.includes(id)?f.bookmarks.filter(x=>x!==id):[...f.bookmarks,id];});
+  render({keepScroll:true});
+  notify(foundationState.bookmarks.includes(id)?'ブックマークに追加しました':'ブックマークを解除しました');
+  break;
+ }
+ case 'foundation-back':{
+  const step=foundationState.session?.step;
+  if(step==='check'||step==='review'){mutateFoundation(f=>{if(f.session)f.session.step='intro';});render();}
+  else if(step==='reflection'){mutateFoundation(f=>{if(f.session)f.session.step='check';});render();}
+  else navigate('#/home');
+  break;
+ }
+ case 'foundation-finish':mutateFoundation(f=>{f.session=null;});navigate('#/home');break;
+ case 'foundation-to-practice-topic':mutateFoundation(f=>{f.session=null;});setMode('practice');startWithCheck({category:el.dataset.category||'',topic:el.dataset.topic||''});break;
+ case 'start':setMode('practice');startWithCheck({category:el.dataset.category||'',topic:el.dataset.topic||''});break;
+ case 'practice':setMode('practice');startWithCheck({category:el.dataset.category||'',topic:el.dataset.topic||'',practice:true});break;
+ case 'single':setMode('practice');startWithCheck({question:el.dataset.question});break;
  case 'new-session':startWithCheck();break;
  case 'replace-session':{const opts=JSON.parse(el.dataset.options);closeModal();start(opts);break;}
  case 'resume':closeModal();navigate('#/study');break;
@@ -92,10 +158,10 @@ document.addEventListener('click',async event=>{
  case 'finish':mutate(s=>{if(s.session)s.session.phase='done';});closeModal();navigate('#/study');break;
  case 'pause':closeModal();navigate('#/home');break;
  case 'close-modal':closeModal();break;
- case 'export':if(storageError){download(localStorage.getItem(STORAGE_KEY)||'{}',`backend-kb-recovery-${dayKey()}.json`);notify('元の保存データを書き出しました');}else{download(exportBackup(state),`backend-kb-${dayKey()}.json`);notify('バックアップを書き出しました');}break;
+ case 'export':if(storageError){download(localStorage.getItem(STORAGE_KEY)||'{}',`backend-kb-recovery-${dayKey()}.json`);notify('元の保存データを書き出しました');}else{download(exportBackup(state,foundationState,selectedMode),`backend-kb-${dayKey()}.json`);notify('バックアップを書き出しました');}break;
  case 'raw-export':download(localStorage.getItem(STORAGE_KEY)||'{}',`backend-kb-recovery-${dayKey()}.json`);break;
  case 'import':document.querySelector('#backup-file').click();break;
- case 'confirm-import':if(restoreDraft){saveState(restoreDraft.state);state=restoreDraft.state;storageError='';restoreDraft=null;closeModal();render();notify('バックアップを復元しました');}break;
+ case 'confirm-import':if(restoreDraft){saveState(restoreDraft.state);saveFoundationState(restoreDraft.foundations);saveMode(restoreDraft.selectedMode);state=restoreDraft.state;foundationState=restoreDraft.foundations;selectedMode=restoreDraft.selectedMode;storageError='';restoreDraft=null;closeModal();render();notify('バックアップを復元しました');}break;
  case 'chapter':document.getElementById('chapter-'+el.dataset.chapter)?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});break;
  case 'check-offline':offlineLabel='保存状態を確認しています…';render({keepScroll:true});await checkOffline();render({keepScroll:true});break;
  }
@@ -103,7 +169,13 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('keydown',e=>{if(!modal)return;if(e.key==='Escape')closeModal();if(e.key==='Tab'){const items=[...document.querySelectorAll('.dialog button,.dialog a')];if(e.shiftKey&&document.activeElement===items[0]){e.preventDefault();items.at(-1).focus();}else if(!e.shiftKey&&document.activeElement===items.at(-1)){e.preventDefault();items[0].focus();}}});
 window.addEventListener('hashchange',()=>{closeModal();render();});
-window.addEventListener('storage',e=>{if(e.key===STORAGE_KEY){try{state=loadState();render({keepScroll:true});notify('別の画面で変更された記録を反映しました');}catch{notify('学習記録を再読み込みできませんでした');}}});
+window.addEventListener('storage',e=>{
+ if([STORAGE_KEY,FOUNDATION_STORAGE_KEY,MODE_STORAGE_KEY].includes(e.key)){
+  try{state=loadState();foundationState=loadFoundationState();selectedMode=loadMode();render({keepScroll:true});notify('別の画面で変更された記録を反映しました');}
+  catch{notify('学習記録を再読み込みできませんでした');}
+ }
+});
 window.addEventListener('online',()=>notify('オンラインになりました'));
 window.addEventListener('offline',()=>notify(offlineLabel==='オフラインで学習できます'?'オフラインで学習を続けられます':'通信が切れました。教材の保存状態を確認してください'));
 render();checkOffline().then(()=>render({keepScroll:true}));
+

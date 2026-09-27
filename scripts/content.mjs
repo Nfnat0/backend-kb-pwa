@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import {createHash} from 'node:crypto';
 const definitions = [
  ['network','ネットワーク & 通信','通信の仕組みから、壊れにくいAPIへ。','Wifi','#438bff',['http-networking','api-design','distributed-apis']],
@@ -51,6 +51,27 @@ for(const [ci,d] of definitions.entries()){
  }
 }
 if(topics.length!==24||questions.length!==120)throw Error('Content count mismatch');
+const foundationPath=existsSync('ios-app/BackendKB/Resources/foundation.json')?'ios-app/BackendKB/Resources/foundation.json':'src/data/foundation.json';
+const foundationSource=readFileSync(foundationPath,'utf8');
+const foundation=JSON.parse(foundationSource);
+const topicIds=new Set(topics.map(t=>t.id));
+if(foundation.lessons?.length!==30||new Set(foundation.lessons.map(l=>l.id)).size!==30)throw Error('Foundation lesson count mismatch');
+if(!foundation.terms?.length||new Set(foundation.terms.map(t=>t.id)).size!==foundation.terms.length)throw Error('Foundation term mismatch');
+const coveredTopics=new Set(foundation.lessons.map(l=>l.topic));
+if(coveredTopics.size!==topicIds.size||[...topicIds].some(id=>!coveredTopics.has(id)))throw Error('Foundation topic coverage mismatch');
+for(const l of foundation.lessons){
+ for(const f of ['id','topic','title','objective','exampleTitle','example','reflectionPrompt','sourceSection','modelAnswer']){if(typeof l[f]!=='string'||!l[f].trim())throw Error(`Invalid lesson ${l.id}: ${f}`);}
+ if(!Array.isArray(l.sections)||!l.sections.length||l.sections.some(s=>!s.title||!s.body))throw Error(`Invalid sections in ${l.id}`);
+ if(!Array.isArray(l.flow)||l.flow.length<2||!Array.isArray(l.keyPoints)||l.keyPoints.length<2)throw Error(`Invalid flow/keyPoints in ${l.id}`);
+ const cids=l.check?.choices?.map(c=>c.id)||[];
+ if(cids.length<2||new Set(cids).size!==cids.length||!cids.includes(l.check.correct)||!l.check.prompt||!l.check.explanation)throw Error(`Invalid check in ${l.id}`);
+}
+for(const t of foundation.terms){
+ for(const f of ['id','japanese','definition','topic']){if(typeof t[f]!=='string'||!t[f].trim())throw Error(`Invalid term ${t.id}: ${f}`);}
+ if(!topicIds.has(t.topic))throw Error(`Unknown topic in term ${t.id}`);
+}
 mkdirSync('src/data',{recursive:true});
 writeFileSync('src/data/content.json',JSON.stringify({version:'c881de6',sourceDate:'2026-09-23',categories,topics,questions}));
-console.log(`${topics.length} topics / ${questions.filter(q=>q.type==='explain').length} explanations / ${questions.filter(q=>q.type==='choice').length} choices`);
+writeFileSync('src/data/foundation.json',JSON.stringify(foundation));
+console.log(`${topics.length} topics / ${questions.filter(q=>q.type==='explain').length} explanations / ${questions.filter(q=>q.type==='choice').length} choices / ${foundation.lessons.length} foundation lessons / ${foundation.terms.length} glossary terms`);
+

@@ -39,3 +39,59 @@ export function stats(state,questions,today=dayKey()){
  while(days.has(cursor)){streak++;cursor=addDays(cursor,-1);}
  return {answers:state.events.length,learned:evaluated.size,today:state.events.filter(e=>e.day===today).length,days:days.size,streak,due:[...scheduled.values()].filter(e=>e.due<=today).length,choiceTotal:choice.length,accuracy:choice.length?Math.round(choice.filter(e=>e.correct).length/choice.length*100):null,ratings:[0,1,2].map(r=>explain.filter(e=>e.rating===r).length)};
 }
+export function scheduleFoundation(previous,rating,correct=true,today=dayKey()){
+ const advance=rating===2&&correct!==false;
+ const prevAdvance=previous&&previous.rating===2&&previous.correct!==false;
+ const interval=correct===false||rating===0?1:rating===1?3:INTERVALS[Math.min(prevAdvance?Math.max(0,INTERVALS.indexOf(previous.interval))+1:0,3)];
+ return {rating,interval,due:addDays(today,interval),streakReset:!advance};
+}
+export function latestFoundation(events,{scheduled=false}={}){
+ const map=new Map();for(const e of events)if(!scheduled||!e.practice)map.set(e.lesson,e);return map;
+}
+export function isWeakFoundation(e){return Boolean(e&&(e.rating<2||e.correct===false));}
+export function dueFoundationLessons(lessons,foundationState,today=dayKey()){
+ const scheduled=latestFoundation(foundationState.events,{scheduled:true});
+ return lessons.filter(l=>scheduled.has(l.id)&&scheduled.get(l.id).due<=today).sort((a,b)=>scheduled.get(a.id).due.localeCompare(scheduled.get(b.id).due));
+}
+export function recommendedFoundationLesson(lessons,foundationState,today=dayKey()){
+ const due=dueFoundationLessons(lessons,foundationState,today);
+ if(due.length)return {lesson:due[0],isDue:true};
+ const evaluated=latestFoundation(foundationState.events);
+ const next=lessons.find(l=>!foundationState.completedAt[l.id]&&!evaluated.has(l.id));
+ return next?{lesson:next,isDue:false}:null;
+}
+export function makeFoundationSession(lessonId,{review=false,practice=false}={}){
+ return {id:crypto.randomUUID(),lessonId,step:review?'review':'intro',selectedChoice:null,keyPointsRevealed:false,isReview:review,practice,startedAt:new Date().toISOString(),lastEvent:null};
+}
+export function answerFoundation(foundationState,lesson,rating,now=new Date()){
+ const s=foundationState.session;if(!s||s.lessonId!==lesson.id||!['reflection','review'].includes(s.step)||!s.keyPointsRevealed)throw Error('レッスンの進行状態を確認してください。');
+ if(![0,1,2].includes(rating))throw Error('評価を選んでください。');
+ const previous=latestFoundation(foundationState.events,{scheduled:true}).get(lesson.id);const day=dayKey(now);
+ const practice=s.practice||Boolean(previous&&previous.due>day);
+ const correct=s.isReview?null:s.selectedChoice===lesson.check.correct;
+ const next=practice?(previous?{due:previous.due,interval:previous.interval}:{due:day,interval:0}):scheduleFoundation(previous,rating,correct,day);
+ const event={id:crypto.randomUUID(),lesson:lesson.id,topic:lesson.topic,rating,correct,choice:s.isReview?null:s.selectedChoice,practice,day,due:next.due,interval:next.interval,at:now.toISOString()};
+ foundationState.events.push(event);
+ foundationState.completedAt[lesson.id]=now.toISOString();
+ s.step='done';s.lastEvent=event.id;return event;
+}
+export function foundationStats(foundationState,lessons,today=dayKey()){
+ const ids=new Set(lessons.map(l=>l.id));const events=foundationState.events.filter(e=>ids.has(e.lesson));
+ const evaluated=latestFoundation(events);const scheduled=latestFoundation(events,{scheduled:true});
+ const completed=lessons.filter(l=>Boolean(foundationState.completedAt[l.id])||evaluated.has(l.id)).length;
+ const days=new Set(foundationState.events.map(e=>e.day));let cursor=days.has(today)?today:addDays(today,-1),streak=0;
+ while(days.has(cursor)){streak++;cursor=addDays(cursor,-1);}
+ return {
+  answers:foundationState.events.length,
+  completed,
+  total:lessons.length,
+  today:foundationState.events.filter(e=>e.day===today).length,
+  days:days.size,
+  streak,
+  due:[...scheduled.values()].filter(e=>e.due<=today).length,
+  weak:lessons.filter(l=>isWeakFoundation(evaluated.get(l.id))).length,
+  bookmarks:foundationState.bookmarks.filter(id=>ids.has(id)).length,
+  ratings:[0,1,2].map(r=>[...evaluated.values()].filter(e=>e.rating===r).length)
+ };
+}
+
